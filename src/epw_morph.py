@@ -152,9 +152,10 @@ def morph_epw(parent_path: str, out_path: str, clim_T: dict, clim_E: dict,
         raise ValueError(f"expected exactly {EPW_DATA_ROWS} data rows after header, got {len(data)}; "
                          f"extra or missing rows will not be silently discarded")
     # schema check: column count on EVERY row
+    first_cols = len(data[0].rstrip("\n").split(","))
     for i, line in enumerate(data):
         ncols = len(line.rstrip("\n").split(","))
-        if ncols < 15:
+        if ncols != first_cols:
             raise ValueError(f"row {i}: only {ncols} columns (expected >= 15); malformed EPW")
     # calendar validation: verify the 8760 rows form a complete, ORDERED,
     # non-leap-year calendar sequence (not just a set-based membership check)
