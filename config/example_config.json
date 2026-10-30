@@ -1,0 +1,10 @@
+{
+  "parent_epw": "/path/to/user/licensed/Leeds_DSY1_2020High50_.epw",
+  "paired_observations": "/path/to/paired_T.csv",
+  "paired_observations_e": "/path/to/paired_e.csv",
+  "groups": [["band", "Centre"], ["band", "Inner"], ["band", "Outer"], ["band", "Rural"]],
+  "support_min_sites": 2,
+  "output_dir": "out",
+  "ref_elevation_m": 262.0,
+  "lapse_rates_k_per_km": [5.0, 6.5, 9.8]
+}
