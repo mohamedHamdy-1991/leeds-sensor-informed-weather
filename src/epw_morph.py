@@ -156,36 +156,27 @@ def morph_epw(parent_path: str, out_path: str, clim_T: dict, clim_E: dict,
         ncols = len(line.rstrip("\n").split(","))
         if ncols < 15:
             raise ValueError(f"row {i}: only {ncols} columns (expected >= 15); malformed EPW")
-    # calendar validation: verify the 8760 rows form a complete non-leap-year calendar
+    # calendar validation: verify the 8760 rows form a complete, ORDERED,
+    # non-leap-year calendar sequence (not just a set-based membership check)
     _DAYS = {1:31,2:28,3:31,4:30,5:31,6:30,7:31,8:31,9:30,10:31,11:30,12:31}
-    expected_keys = set()
+    expected_sequence = []
     for m in range(1, 13):
         for d in range(1, _DAYS[m] + 1):
             for h in range(1, 25):
-                expected_keys.add((m, d, h))
-    actual_keys = set()
+                expected_sequence.append((m, d, h))
     for i, line in enumerate(data):
         parts_raw = line.rstrip("\n").split(",")
+        if len(parts_raw) < 15:
+            raise ValueError(f"row {i}: only {len(parts_raw)} columns (expected >= 15); malformed EPW")
         try:
             m_p, d_p, h_p = int(parts_raw[1]), int(parts_raw[2]), int(parts_raw[3])
         except (ValueError, IndexError):
             raise ValueError(f"row {i}: cannot parse month/day/hour from {parts_raw[:4]}")
-        if m_p < 1 or m_p > 12:
-            raise ValueError(f"row {i}: month {m_p} out of range 1-12")
-        if d_p < 1 or d_p > _DAYS.get(m_p, 0):
-            raise ValueError(f"row {i}: day {d_p} out of range for month {m_p}")
-        if h_p < 1 or h_p > 24:
-            raise ValueError(f"row {i}: hour {h_p} out of range 1-24")
-        ckey = (m_p, d_p, h_p)
-        if ckey in actual_keys:
-            raise ValueError(f"row {i}: duplicate calendar key {ckey}")
-        actual_keys.add(ckey)
-    missing_keys = expected_keys - actual_keys
-    extra_keys = actual_keys - expected_keys
-    if missing_keys:
-        raise ValueError(f"calendar incomplete: {len(missing_keys)} missing keys, first: {sorted(missing_keys)[:3]}")
-    if extra_keys:
-        raise ValueError(f"calendar has {len(extra_keys)} invalid keys, first: {sorted(extra_keys)[:3]}")
+        expected = expected_sequence[i]
+        actual = (m_p, d_p, h_p)
+        if actual != expected:
+            raise ValueError(f"row {i}: calendar sequence mismatch: got {actual}, expected {expected} "
+                             f"(rows must be in strict chronological order)")
     cT, cE = clim_T[group_key], clim_E[group_key]
     n_bounded = n_rows = 0
     n_degenerate = 0

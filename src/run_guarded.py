@@ -6,7 +6,7 @@ Resource guard (REPAIRED per GATE_B_BOUNDED_COMPLETION_ORDER §2, 2026-10-27):
   RAM and mislabelled it "internal_free_GB". Those historical values are RAM
   evidence, NOT disk measurements; existing RUN_RECORD/RESOURCE_GUARD.json files
   keep their original bytes and must never be read as historical disk data.
-  The repaired guard measures the ACTUAL internal data volume at /Users/mohamedali
+  The repaired guard measures the ACTUAL internal data volume at os.environ.get("ENERGYPLUS_ENGINE", "energyplus")
   with shutil.disk_usage (path/device/bytes/GiB recorded), records the external
   output volume separately with a per-job footprint reservation (basis: median
   bytes of prior completed run dirs — no invented universal threshold), keeps
@@ -34,26 +34,27 @@ import subprocess
 import sys
 import time
 
-EPLUS = (os.environ.get("ENERGYPLUS_ENGINE", "energyplus")
-         "Work/Ph.D/Publications/Sensor-Calibrated/Publication_Workflow_NEW/"
-         "09_TM59/simulation_correction_2026-09-14/tools/EnergyPlus-23.1.0/energyplus-23.1.0")
-EPLUS_SHA = "9832298eb181205d"
-# Explicit weather dispatch: NO hard-coded default. The caller must supply the exact
-# EPW path and its full SHA-256; a wrong-weather launch must be impossible.
-WEATHER = os.environ.get("ZC_EPW_PATH") or None
-if not WEATHER:
-    raise SystemExit("REFUSE: ZC_EPW_PATH not set — this launcher requires an explicit EPW")
-WEATHER_SHA = os.environ.get("ZC_EPW_SHA256") or None
-if not WEATHER_SHA:
-    raise SystemExit("REFUSE: ZC_EPW_SHA256 not set — explicit SHA required for weather identity")
-if not os.path.isfile(WEATHER):
-    raise SystemExit(f"REFUSE: EPW path does not exist: {WEATHER}")
-WEATHER_SHA = "ab17979f299a6517"
-
-INTERNAL_HOME = "/Users/mohamedali"
+EPLUS = os.environ.get("ENERGYPLUS_ENGINE", "energyplus")
+EPLUS_SHA = os.environ.get("ENERGYPLUS_SHA256", "9832298eb181205d")
+INTERNAL_HOME = os.environ.get("INTERNAL_VOLUME", "/")
 INTERNAL_FREE_GE_GIB = 2.0
 SWAP_USED_LT_MIB = 8192.0
 RAM_FREE_PCT_GE = 10.0           # acceptable memory-pressure level (consumed)
+
+
+def validate_dispatch(epw_path, epw_sha):
+    """Validate caller-supplied weather identity. Call before launching E+.
+    Refuses if the path doesn't exist or the SHA doesn't match the file."""
+    if not epw_path:
+        raise SystemExit("REFUSE: ZC_EPW_PATH not set — this launcher requires an explicit EPW")
+    if not epw_sha:
+        raise SystemExit("REFUSE: ZC_EPW_SHA256 not set — explicit SHA required for weather identity")
+    if not os.path.isfile(epw_path):
+        raise SystemExit(f"REFUSE: EPW path does not exist: {epw_path}")
+    actual = hashlib.sha256(open(epw_path, "rb").read()).hexdigest()
+    if not actual.startswith(epw_sha):
+        raise SystemExit(f"REFUSE: weather SHA mismatch: caller={epw_sha}, actual={actual[:16]}")
+    return True           # acceptable memory-pressure level (consumed)
 EXTERNAL_FREE_JOB_FOOTPRINTS = 2 # output volume must cover this many concurrent jobs
 
 

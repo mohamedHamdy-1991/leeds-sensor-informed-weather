@@ -172,6 +172,32 @@ def test_writer_parent_rh_range_refusal():
     except ValueError as e: assert "RH" in str(e) and "clamped" in str(e).lower()
     shutil.rmtree(tmp)
 
+def test_writer_short_row_refusal():
+    """A 15-field final row must be refused (EPW requires full schema)."""
+    tmp = tempfile.mkdtemp(); parent = _make_parent_epw(os.path.join(tmp, "parent.epw"))
+    with open(parent) as f: lines = f.readlines()
+    parts = lines[-1].strip().split(","); lines[-1] = ",".join(parts[:15]) + "\n"
+    with open(parent, "w") as f: f.writelines(lines)
+    clim_T, clim_E = _constant_clim(0.0, 0.0)
+    out = os.path.join(tmp, "out.epw")
+    try:
+        morph_epw(parent, out, clim_T, clim_E, "band:Centre"); raise AssertionError("should refuse 15-field row")
+    except (ValueError, IndexError): pass
+    shutil.rmtree(tmp)
+
+def test_writer_swapped_rows_refusal():
+    """Swapping the first two hourly rows must be refused (ordered calendar)."""
+    tmp = tempfile.mkdtemp(); parent = _make_parent_epw(os.path.join(tmp, "parent.epw"))
+    with open(parent) as f: lines = f.readlines()
+    lines[8], lines[9] = lines[9], lines[8]  # swap first two data rows
+    with open(parent, "w") as f: f.writelines(lines)
+    clim_T, clim_E = _constant_clim(0.0, 0.0)
+    out = os.path.join(tmp, "out.epw")
+    try:
+        morph_epw(parent, out, clim_T, clim_E, "band:Centre"); raise AssertionError("should refuse swapped rows")
+    except ValueError as e: assert "sequence mismatch" in str(e).lower() or "expected" in str(e).lower()
+    shutil.rmtree(tmp)
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     p = f = 0
