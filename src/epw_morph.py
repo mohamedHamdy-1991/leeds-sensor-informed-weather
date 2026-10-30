@@ -11,17 +11,29 @@ Implements the frozen rules of the scenario-morph contract (v2.2):
     adjusted temperature; RH and dew point reconstructed from the final state;
   * parent wind, radiation and sky-infrared fields untouched.
 
-Dependencies: numpy, pandas. The public entry point is `build_climatology`
+EPW column convention (0-based): 0=year, 1=month, 2=day, 3=hour (1-24,
+end-of-hour), 6=dry-bulb, 7=dew-point, 8=RH. The profile-hour keys in the
+climatology are 0-23, so reading maps EPW hour h_epw -> h_profile = h_epw - 1.
+When vapour pressure reaches 0 Pa, dew point is written as -70.0 C (the EPW
+data-range floor) per the accepted generator convention, not as T.
+
+Dependencies: numpy, pandas. The public entry points are `build_climatology`
 (pure) and `morph_epw` (file-level). Units: temperature degC, vapour
 pressure Pa, dew point degC, RH %.
 """
 from __future__ import annotations
 
+import os
+import re
 import numpy as np
 import pandas as pd
 
 E0_PA, MAGNUS_A, MAGNUS_B = 610.94, 17.625, 243.04
 SUPPORT_MIN_SITES = 2
+EPW_DATA_ROWS = 8760
+EPW_HEADER_LINES = 8
+EPW_N_COLS = 32  # standard EPW column count
+DEW_POINT_UNDEFINED_C = -70.0  # EPW data-range floor per accepted convention
 MONTH_SEASON = {12: "DJF", 1: "DJF", 2: "DJF", 3: "MAM", 4: "MAM", 5: "MAM",
                 6: "JJA", 7: "JJA", 8: "JJA", 9: "SON", 10: "SON", 11: "SON"}
 
@@ -44,6 +56,12 @@ def rh_from_te(t_c, e_pa):
     return np.clip(rh, 0.0, 100.0)
 
 
+def _check_finite(name, *vals):
+    for v in vals:
+        if not np.isfinite(v):
+            raise ValueError(f"{name}: nonfinite value {v}")
+
+
 def build_climatology(paired: pd.DataFrame, groups: list[tuple[str, str]],
                       value_col: str, support_min: int = SUPPORT_MIN_SITES) -> dict:
     """Equal-site month-hour climatology with the frozen fallback hierarchy.
@@ -53,8 +71,10 @@ def build_climatology(paired: pd.DataFrame, groups: list[tuple[str, str]],
             study's paired cohort files). groups: list of (kind, label) with
             kind in {"band", "lcz"}.
     Returns {f"{kind}:{g}": {(m, h): {"applied": v, "support": n, "level": L}}}.
-    Raises on any unscorable cell after the full hierarchy.
+    Raises on any unscorable cell after the full hierarchy or nonfinite values.
     """
+    if paired[value_col].isna().any() or not np.isfinite(paired[value_col].dropna()).all():
+        raise ValueError(f"nonfinite values in {value_col} column")
     df = paired.assign(season=paired["month"].map(MONTH_SEASON))
 
     def agg(index_cols):
@@ -107,26 +127,61 @@ def morph_epw(parent_path: str, out_path: str, clim_T: dict, clim_E: dict,
     """Write a conditional EPW variant. Returns a QC summary.
 
     parent_path: the licensed parent EPW (8 header lines + 8760 rows).
-    clim_T / clim_E: build_climatology outputs for the temperature and
+    clim_T / clim_E: build_climatology outputs for temperature and
     vapour-pressure departures; group_key like 'band:Centre'.
     Only EPW columns 7 (dry-bulb, 0-based 6), 8 (dew point) and 9 (RH) change;
-    wind, radiation and sky-infrared are byte-preserved from the parent.
+    all other columns are byte-preserved from the parent.
+
+    Guards: refuses nonfinite correction values or parent readings; validates
+    the EPW column count and row count; validates month/hour ranges from the
+    actual data rows; refuses to overwrite an existing output file.
+
+    Sentinel: when the bounded vapour pressure reaches 0 Pa, dew point is
+    written as -70.0 C (the EPW data-range floor) per the accepted generator
+    convention, not as T.
     """
+    if os.path.exists(out_path):
+        raise FileExistsError(f"refusing to overwrite existing output: {out_path}")
     with open(parent_path) as f:
         lines = f.readlines()
-    header, data = lines[:8], lines[8:]
-    if len(data) != 8760:
-        raise ValueError(f"expected 8760 data rows, got {len(data)}")
+    if len(lines) < EPW_HEADER_LINES + EPW_DATA_ROWS:
+        raise ValueError(f"expected >= {EPW_HEADER_LINES + EPW_DATA_ROWS} lines, got {len(lines)}")
+    header, data = lines[:EPW_HEADER_LINES], lines[EPW_HEADER_LINES:EPW_HEADER_LINES + EPW_DATA_ROWS]
+    # schema check: column count consistency (first data row)
+    first_cols = len(data[0].rstrip("\n").split(","))
+    if first_cols < 15:
+        raise ValueError(f"EPW data row has only {first_cols} columns; expected >= 15")
     cT, cE = clim_T[group_key], clim_E[group_key]
     n_bounded = n_rows = 0
+    n_degenerate = 0
     out_lines = []
+    seen = set()
     for i, line in enumerate(data):
         parts = line.rstrip("\n").split(",")
-        month, hour = int(parts[1]), int(parts[2])
+        year, month, day, hour_epw = int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])
+        hour = hour_epw - 1  # EPW 1-24 end-of-hour -> 0-23 profile hour
+        if not (1 <= month <= 12):
+            raise ValueError(f"row {i}: month {month} out of range")
+        if not (0 <= hour <= 23):
+            raise ValueError(f"row {i}: hour {hour_epw} -> profile {hour} out of range")
+        key = (month, day, hour_epw)
+        if key in seen:
+            raise ValueError(f"row {i}: duplicate calendar key {key}")
+        seen.add(key)
         dT = cT[(month, hour)]["applied"]
         dE = cE[(month, hour)]["applied"]
-        t0 = float(parts[6])
-        rh0 = min(max(float(parts[8]), 0.0), 100.0)
+        _check_finite(f"row {i} dT", dT)
+        _check_finite(f"row {i} dE", dE)
+        t0_str = parts[6].strip()
+        rh0_str = parts[8].strip()
+        t0 = float(t0_str)
+        rh0 = float(rh0_str)
+        _check_finite(f"row {i} parent T", t0)
+        _check_finite(f"row {i} parent RH", rh0)
+        # compute parent e from actual RH (do NOT silently clamp; the EPW spec
+        # has RH in [0,100] and the parent data is a licensed verified product)
+        if rh0 < 0.0 or rh0 > 100.0:
+            raise ValueError(f"row {i}: parent RH {rh0} outside [0, 100]; parent data issue, not silently clamped")
         e0 = float(es_pa(np.array([t0]))[0]) * rh0 / 100.0
         t1 = t0 + dT
         e1 = max(e0 + dE, 0.0)
@@ -135,16 +190,27 @@ def morph_epw(parent_path: str, out_path: str, clim_T: dict, clim_E: dict,
         if bounded:
             e1 = e_sat
             n_bounded += 1
-        rh1 = 100.0 * e1 / e_sat if e_sat > 0 else 0.0
-        td1 = float(es_inv_pa(np.array([e1]))[0]) if e1 > 0 else t1
-        td1 = min(td1, t1)
+        if e_sat <= 0:
+            raise ValueError(f"row {i}: saturation pressure {e_sat} <= 0 at T={t1}")
+        rh1 = min(100.0 * e1 / e_sat, 100.0)
+        if e1 <= 0:
+            # dew point undefined at e=0: write EPW data-range floor per accepted convention
+            td1 = DEW_POINT_UNDEFINED_C
+            n_degenerate += 1
+        else:
+            td1 = float(es_inv_pa(np.array([e1]))[0])
+            td1 = min(td1, t1)
         parts[6] = f"{t1:.1f}"
         parts[7] = f"{td1:.1f}"
         parts[8] = f"{rh1:.1f}"
         out_lines.append(",".join(parts))
         n_rows += 1
+    if n_rows != EPW_DATA_ROWS:
+        raise ValueError(f"processed {n_rows} rows, expected {EPW_DATA_ROWS}")
     with open(out_path, "w") as f:
         f.writelines(header)
         f.writelines(l + "\n" for l in out_lines)
     return {"rows": n_rows, "bounded_at_saturation": n_bounded,
-            "bounded_share": n_bounded / n_rows}
+            "bounded_share": n_bounded / n_rows,
+            "degenerate_e0_rows": n_degenerate,
+            "dew_point_sentinel_C": DEW_POINT_UNDEFINED_C}

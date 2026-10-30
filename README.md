@@ -11,19 +11,30 @@ This repository contains the **general, reusable** components of the workflow:
 - `src/epw_morph.py` — the frozen morph algorithm: two-stage equal-site
   month-hour climatology with the documented fallback hierarchy, applied to a
   licensed parent EPW (temperature and vapour pressure; saturation bounding;
-  wind/radiation untouched). Golden tests in `tests/`.
+  wind/radiation untouched). Golden tests in `tests/` (12 tests covering
+  climatology correctness, real-writer behaviour, physical closure, refusal
+  cases, column preservation, and hour-mapping negative probe).
 - `src/lapse_sensitivity.py` — departure diagnostics and the clearly labelled
-  HYPOTHETICAL lapse-rate sensitivity (not a measured correction).
-- `src/extract_tm59.py`, `src/make_run_copy.py`, `src/run_guarded.py` —
-  EnergyPlus run conventions: guarded execution with resource checks, the
-  stage-1 run-copy convention, and TM59 result extraction from the run SQL.
-- `src/deliver_reviewed_results.py` — hash-verified, atomic delivery of
-  curated results.
+  HYPOTHETICAL lapse-rate sensitivity (not a measured correction). CLI:
+  `python3 src/lapse_sensitivity.py --paired PAIRED.csv --sites SITES.csv --ref-elevation 262.0 --outdir OUT`
+- `src/extract_tm59.py`, `src/make_run_copy.py` — EnergyPlus run conventions.
+- `src/run_guarded.py` — guarded execution with resource checks
+  (set `ENERGYPLUS_ENGINE` env var; default `energyplus` on PATH).
+- `src/deliver_reviewed_results.py` — hash-verified, atomic delivery
+  (set `CAMPAIGN_ROOT` and `ONEDRIVE_ROOT` env vars).
+
+## Parity with the accepted campaign
+
+The morph_epw writer was verified against an accepted campaign output
+(S58_High50_band_Centre.epw) using the same frozen cohort and licensed parent:
+RH matches exactly; T and Td agree within single-decimal serialisation
+rounding (max 0.05 K). Byte-level differences arise solely from serialisation;
+decoded numerical equality is verified.
 
 ## Not included (and why)
 
-- **Licensed CIBSE weather files** (the DSY parents): redistribution is not
-  permitted. `epw_morph.morph_epw` accepts any user-supplied licensed parent.
+- **Licensed CIBSE weather files**: redistribution is not permitted.
+  `epw_morph.morph_epw` accepts any user-supplied licensed parent.
 - **Raw sensor data and restricted collaborator data**: available per the
   manuscript's data-availability statement; the public CC BY 4.0 microclimate
   release (doi.org/10.25448/lbu.31431745.v1) covers 16 Apr 2023 - 31 Aug 2024
@@ -35,15 +46,10 @@ This repository contains the **general, reusable** components of the workflow:
 
 ```bash
 pip install numpy pandas          # stdlib otherwise
-python -m pytest tests/           # or: python tests/test_epw_morph.py
+python tests/test_epw_morph.py    # 12 tests
 python src/lapse_sensitivity.py --paired PAIRED.csv --sites SITES.csv \
        --ref-elevation 262.0 --outdir OUT
 ```
-
-`epw_morph.build_climatology` expects a paired DataFrame with columns
-`[band, lcz, month, hour, site, value]` (one row per paired observation);
-`morph_epw(parent, out, clim_T, clim_E, "band:Centre")` writes the conditional
-EPW and returns a written-bytes QC summary including the saturation-bound count.
 
 ## Provenance
 

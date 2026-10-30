@@ -6,9 +6,8 @@ Curated CSV + input copies only (raw SQL/ESO stay canonically on SSD). Stage + h
 atomic publish; never overwrite author files; guard >= 2 GiB free after estimated copy."""
 import csv, hashlib, json, os, shutil, sqlite3, gzip
 
-C = "/Volumes/Mo.Hamdy/sensor Informed/FINAL_CAMPAIGN_2026-10-27"
-ONE = ("/Users/mohamedali/Library/CloudStorage/OneDrive-LeedsBeckettUniversity/Work/Ph.D/"
-       "Publications/Sensor-Calibrated/Leeds_UWM_Rebuild")
+C = os.environ.get("CAMPAIGN_ROOT", ".")
+ONE = os.environ.get("ONEDRIVE_ROOT", "..")
 REL = "Simulation Results/ZCode_Reviewed_Campaign_2026-10-27"
 IDX = f"{C}/05_ANALYSIS/ACCEPTED_RESULTS_INDEX.csv"
 RELJ = f"{C}/REVIEW/NUMERICAL_RESULTS_DELIVERY_RELEASE.json"
