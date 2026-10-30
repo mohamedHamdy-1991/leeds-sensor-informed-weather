@@ -43,18 +43,25 @@ RAM_FREE_PCT_GE = 10.0           # acceptable memory-pressure level (consumed)
 
 
 def validate_dispatch(epw_path, epw_sha):
-    """Validate caller-supplied weather identity. Call before launching E+.
-    Refuses if the path doesn't exist or the SHA doesn't match the file."""
+    """Validate caller-supplied weather identity. Must be called before any
+    output creation or launch. Requires a full 64-character hex digest with
+    exact equality against the actual file SHA-256 (not a prefix match)."""
     if not epw_path:
-        raise SystemExit("REFUSE: ZC_EPW_PATH not set — this launcher requires an explicit EPW")
+        raise SystemExit("REFUSE: weather path not set — this launcher requires an explicit EPW")
     if not epw_sha:
-        raise SystemExit("REFUSE: ZC_EPW_SHA256 not set — explicit SHA required for weather identity")
+        raise SystemExit("REFUSE: weather SHA-256 not set — explicit full digest required")
+    if len(epw_sha) != 64:
+        raise SystemExit(f"REFUSE: weather SHA must be exactly 64 hex chars, got {len(epw_sha)}")
+    import re
+    if not re.match(r'^[0-9a-fA-F]{64}$', epw_sha):
+        raise SystemExit(f"REFUSE: weather SHA is not valid hex: {epw_sha[:20]}...")
     if not os.path.isfile(epw_path):
         raise SystemExit(f"REFUSE: EPW path does not exist: {epw_path}")
     actual = hashlib.sha256(open(epw_path, "rb").read()).hexdigest()
-    if not actual.startswith(epw_sha):
-        raise SystemExit(f"REFUSE: weather SHA mismatch: caller={epw_sha}, actual={actual[:16]}")
-    return True           # acceptable memory-pressure level (consumed)
+    if actual != epw_sha:
+        raise SystemExit(f"REFUSE: weather SHA exact-equality mismatch: "
+                         f"caller={epw_sha}, actual={actual}")
+    return actual
 EXTERNAL_FREE_JOB_FOOTPRINTS = 2 # output volume must cover this many concurrent jobs
 
 
@@ -246,8 +253,18 @@ def guard(readbacks=None, external_runs_root=None):
     return record, decision == "PASS"
 
 
-def run_case(case_dir, idf_path, label):
-    # external output volume = the volume holding the case directory
+def run_case(case_dir, idf_path, label, epw_path=None, epw_sha=None,
+             _launch=None):
+    """Run one guarded EnergyPlus case.
+
+    epw_path / epw_sha: caller-supplied weather path and full 64-hex SHA-256.
+    _launch: injectable subprocess runner for testing (default: subprocess.run).
+    validate_dispatch is called BEFORE any output creation or launch.
+    """
+    # 1. Validate weather identity (before any output creation)
+    actual_sha = validate_dispatch(epw_path, epw_sha)
+
+    # 2. Resource guard (external output volume = the volume holding case_dir)
     ext_readback = lambda: disk_readback(case_dir)  # noqa: E731
     g, ok = guard(readbacks={"external_disk": ext_readback})
     with open(os.path.join(case_dir, "RESOURCE_GUARD.json"), "w") as f:
@@ -256,13 +273,16 @@ def run_case(case_dir, idf_path, label):
         print("GUARD REFUSAL — not launching", json.dumps(g))
         sys.exit(2)
 
+    # 3. Launch with the validated weather path
     out_dir = os.path.join(case_dir, "OUTPUT")
     os.makedirs(out_dir, exist_ok=True)
-    cmd = [EPLUS, "-w", WEATHER, "-d", out_dir, idf_path]
+    cmd = [EPLUS, "-w", epw_path, "-d", out_dir, idf_path]
     t0 = time.time()
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    launch_fn = _launch or subprocess.run
+    proc = launch_fn(cmd, capture_output=True, text=True)
     wall = round(time.time() - t0, 1)
 
+    # 4. Result health checks
     end_path = os.path.join(out_dir, "eplusout.end")
     end_txt = open(end_path).read().strip() if os.path.exists(end_path) else "(missing)"
     err_path = os.path.join(out_dir, "eplusout.err")
@@ -273,6 +293,7 @@ def run_case(case_dir, idf_path, label):
     disposition = ("COMPLETED" if (proc.returncode == 0 and completed and not n_sev and not n_fatal)
                    else ("FATAL_TERMINATION" if n_fatal else "FAILED"))
 
+    # 5. Record actual identities
     rec = {
         "case": label,
         "status": disposition,
@@ -289,7 +310,9 @@ def run_case(case_dir, idf_path, label):
         "idf_sha256_16": sha256_head(idf_path),
         "idf_full_sha256": None,
         "binary_sha256_16": sha256_head(EPLUS),
-        "weather_sha256_16": sha256_head(WEATHER),
+        "weather_sha256_full": actual_sha,
+        "weather_path": epw_path,
+        "engine_path": EPLUS,
         "guard": g,
         "sql_present": os.path.exists(os.path.join(out_dir, "eplusout.sql")),
     }
@@ -302,10 +325,17 @@ def run_case(case_dir, idf_path, label):
         json.dump(rec, f, indent=1)
     print(json.dumps({k: rec[k] for k in
                       ("case", "status", "exit_code", "wall_seconds", "end_file",
-                       "severe", "fatal", "idf_sha256_16", "idf_full_sha256")}, indent=1))
+                       "severe", "fatal", "idf_sha256_16", "idf_full_sha256",
+                       "weather_sha256_full", "weather_path")}, indent=1))
     if rec["status"] != "COMPLETED":
         sys.exit(3)
 
 
 if __name__ == "__main__":
-    run_case(sys.argv[1], sys.argv[2], sys.argv[3])
+    import argparse
+    ap = argparse.ArgumentParser(description="Guarded EnergyPlus runner")
+    ap.add_argument("case_dir"); ap.add_argument("idf_path"); ap.add_argument("label")
+    ap.add_argument("--weather", required=True, help="explicit EPW path")
+    ap.add_argument("--weather-sha", required=True, help="full 64-hex SHA-256 of the EPW")
+    args = ap.parse_args()
+    run_case(args.case_dir, args.idf_path, args.label, args.weather, args.weather_sha)

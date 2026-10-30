@@ -11,7 +11,7 @@ This repository contains the **general, reusable** components of the workflow:
 - `src/epw_morph.py` — the frozen morph algorithm: two-stage equal-site
   month-hour climatology with the documented fallback hierarchy, applied to a
   licensed parent EPW (temperature and vapour pressure; saturation bounding;
-  wind/radiation untouched). Golden tests in `tests/` (12 tests covering
+  wind/radiation untouched). Golden tests in `tests/` (22 tests (14 morph + 8 launcher) covering
   climatology correctness, real-writer behaviour, physical closure, refusal
   cases, column preservation, and hour-mapping negative probe).
 - `src/lapse_sensitivity.py` — departure diagnostics and the clearly labelled
@@ -46,7 +46,7 @@ decoded numerical equality is verified.
 
 ```bash
 pip install numpy pandas          # stdlib otherwise
-python tests/test_epw_morph.py    # 12 tests
+python tests/test_epw_morph.py    # 22 tests (14 morph + 8 launcher)
 python src/lapse_sensitivity.py --paired PAIRED.csv --sites SITES.csv \
        --ref-elevation 262.0 --outdir OUT
 ```
