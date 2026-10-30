@@ -34,7 +34,7 @@ import subprocess
 import sys
 import time
 
-EPLUS = ("/Users/mohamedali/Library/CloudStorage/OneDrive-LeedsBeckettUniversity/"
+EPLUS = (os.environ.get("ENERGYPLUS_ENGINE", "energyplus")
          "Work/Ph.D/Publications/Sensor-Calibrated/Publication_Workflow_NEW/"
          "09_TM59/simulation_correction_2026-09-14/tools/EnergyPlus-23.1.0/energyplus-23.1.0")
 EPLUS_SHA = "9832298eb181205d"

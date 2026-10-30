@@ -144,13 +144,48 @@ def morph_epw(parent_path: str, out_path: str, clim_T: dict, clim_E: dict,
         raise FileExistsError(f"refusing to overwrite existing output: {out_path}")
     with open(parent_path) as f:
         lines = f.readlines()
-    if len(lines) < EPW_HEADER_LINES + EPW_DATA_ROWS:
-        raise ValueError(f"expected >= {EPW_HEADER_LINES + EPW_DATA_ROWS} lines, got {len(lines)}")
-    header, data = lines[:EPW_HEADER_LINES], lines[EPW_HEADER_LINES:EPW_HEADER_LINES + EPW_DATA_ROWS]
-    # schema check: column count consistency (first data row)
-    first_cols = len(data[0].rstrip("\n").split(","))
-    if first_cols < 15:
-        raise ValueError(f"EPW data row has only {first_cols} columns; expected >= 15")
+    if len(lines) < EPW_HEADER_LINES + 1:
+        raise ValueError(f"expected at least {EPW_HEADER_LINES + 1} lines, got {len(lines)}")
+    header = lines[:EPW_HEADER_LINES]
+    data = lines[EPW_HEADER_LINES:]
+    if len(data) != EPW_DATA_ROWS:
+        raise ValueError(f"expected exactly {EPW_DATA_ROWS} data rows after header, got {len(data)}; "
+                         f"extra or missing rows will not be silently discarded")
+    # schema check: column count on EVERY row
+    for i, line in enumerate(data):
+        ncols = len(line.rstrip("\n").split(","))
+        if ncols < 15:
+            raise ValueError(f"row {i}: only {ncols} columns (expected >= 15); malformed EPW")
+    # calendar validation: verify the 8760 rows form a complete non-leap-year calendar
+    _DAYS = {1:31,2:28,3:31,4:30,5:31,6:30,7:31,8:31,9:30,10:31,11:30,12:31}
+    expected_keys = set()
+    for m in range(1, 13):
+        for d in range(1, _DAYS[m] + 1):
+            for h in range(1, 25):
+                expected_keys.add((m, d, h))
+    actual_keys = set()
+    for i, line in enumerate(data):
+        parts_raw = line.rstrip("\n").split(",")
+        try:
+            m_p, d_p, h_p = int(parts_raw[1]), int(parts_raw[2]), int(parts_raw[3])
+        except (ValueError, IndexError):
+            raise ValueError(f"row {i}: cannot parse month/day/hour from {parts_raw[:4]}")
+        if m_p < 1 or m_p > 12:
+            raise ValueError(f"row {i}: month {m_p} out of range 1-12")
+        if d_p < 1 or d_p > _DAYS.get(m_p, 0):
+            raise ValueError(f"row {i}: day {d_p} out of range for month {m_p}")
+        if h_p < 1 or h_p > 24:
+            raise ValueError(f"row {i}: hour {h_p} out of range 1-24")
+        ckey = (m_p, d_p, h_p)
+        if ckey in actual_keys:
+            raise ValueError(f"row {i}: duplicate calendar key {ckey}")
+        actual_keys.add(ckey)
+    missing_keys = expected_keys - actual_keys
+    extra_keys = actual_keys - expected_keys
+    if missing_keys:
+        raise ValueError(f"calendar incomplete: {len(missing_keys)} missing keys, first: {sorted(missing_keys)[:3]}")
+    if extra_keys:
+        raise ValueError(f"calendar has {len(extra_keys)} invalid keys, first: {sorted(extra_keys)[:3]}")
     cT, cE = clim_T[group_key], clim_E[group_key]
     n_bounded = n_rows = 0
     n_degenerate = 0
